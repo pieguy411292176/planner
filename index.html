@@ -304,6 +304,7 @@
       <button data-view="year">Year</button>
     </div>
     <button class="btn" id="gcalBtn" title="Google Calendar">📅 <span id="gcalLabel">Google</span></button>
+    <button class="btn" id="syncBtn" title="Cross-device sync">☁ <span id="syncLabel">Sync</span></button>
     <button class="btn primary" id="addEventBtn">+ Event</button>
   </header>
 
@@ -376,7 +377,33 @@
   </div>
 </div>
 
+<!-- Cross-device Sync modal -->
+<div class="modal-bg" id="syncModal">
+  <div class="modal">
+    <div class="modal-head"><h3>Cross-device Sync</h3><button class="icon-btn" data-sclose>✕</button></div>
+    <div class="modal-body">
+      <div id="syncStatus" class="section-hint"></div>
+      <div class="field">
+        <label>Firebase config <span style="color:var(--muted)">(paste the whole snippet)</span></label>
+        <textarea id="syncConfig" rows="8" placeholder="{ apiKey: '…', authDomain: '….firebaseapp.com', projectId: '…', appId: '…' }"></textarea>
+      </div>
+      <div class="section-hint" style="margin:0">
+        Your tasks, events &amp; labels sync to your private space. Sign in with the <b>same Google
+        account</b> on every device. First-time setup: see <b>DEPLOY.md → Part C</b>.
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="syncSignOut" style="margin-right:auto; display:none; color:var(--danger)">Sign out</button>
+      <button class="btn" data-sclose>Close</button>
+      <button class="btn primary" id="syncSignIn">Save &amp; Sign in</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
 <script>
 /* ============================================================
@@ -420,6 +447,7 @@ function save() {
   localStorage.setItem('planner.tasks', JSON.stringify(state.tasks));
   localStorage.setItem('planner.labels', JSON.stringify(state.labels));
   localStorage.setItem('planner.collapsed', JSON.stringify(state.collapsed));
+  if (typeof cloudPush === 'function') cloudPush();   // mirror to Firebase when signed in
 }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
@@ -1047,6 +1075,126 @@ if (gcalToken && getClientId()) {
   window.addEventListener('load', () => setTimeout(loadCalendarsThenEvents, 600));
 }
 updateGcalLabel();
+
+/* ============================================================
+   Cross-device sync — Firebase (Firestore + Google sign-in)
+   One document per user at planners/{uid} holds {events,tasks,labels}.
+   A live listener keeps every signed-in device in sync. localStorage
+   stays as the offline cache and the not-signed-in fallback.
+   ============================================================ */
+let fbApp=null, fbAuth=null, fbDb=null, fbRef=null, fbUser=null, fbUnsub=null;
+let applyingRemote=false, pushTimer=null;
+const syncModal = document.getElementById('syncModal');
+
+function getFbConfig(){ try { return JSON.parse(localStorage.getItem('planner.fbConfig')) || null; } catch { return null; } }
+
+// Accept a pasted firebaseConfig whether it's JSON or a JS object literal.
+function parseFbConfig(text){
+  const m = (text||'').match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch {}
+  try {
+    const s = m[0]
+      .replace(/([{,]\s*)([A-Za-z0-9_]+)\s*:/g, '$1"$2":')  // quote keys
+      .replace(/'/g, '"')                                    // single → double quotes
+      .replace(/,(\s*[}\]])/g, '$1');                        // drop trailing commas
+    return JSON.parse(s);
+  } catch { return null; }
+}
+
+function initFirebase(){
+  const cfg = getFbConfig();
+  if (!cfg || typeof firebase === 'undefined') return false;
+  if (!fbApp){
+    try {
+      fbApp = firebase.initializeApp(cfg);
+      fbAuth = firebase.auth();
+      fbDb = firebase.firestore();
+      fbDb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});  // offline cache
+      fbAuth.onAuthStateChanged(onAuthChange);
+    } catch(e){ console.warn('Firebase init failed', e); return false; }
+  }
+  return true;
+}
+
+function onAuthChange(user){
+  fbUser = user;
+  updateSyncLabel();
+  refreshSyncUI();
+  if (fbUnsub){ fbUnsub(); fbUnsub=null; }
+  if (!user) return;
+  fbRef = fbDb.collection('planners').doc(user.uid);
+  fbUnsub = fbRef.onSnapshot(snap => {
+    if (!snap.exists){ cloudPushNow(); return; }   // first sign-in → seed cloud from local
+    const d = snap.data() || {};
+    applyingRemote = true;
+    state.events = d.events || [];
+    state.tasks  = d.tasks  || [];
+    state.labels = d.labels || state.labels;
+    localStorage.setItem('planner.events', JSON.stringify(state.events));
+    localStorage.setItem('planner.tasks',  JSON.stringify(state.tasks));
+    localStorage.setItem('planner.labels', JSON.stringify(state.labels));
+    applyingRemote = false;
+    render();
+    refreshSyncUI();
+  }, err => console.warn('sync listener error', err));
+}
+
+function cloudPush(){
+  if (!fbUser || !fbRef || applyingRemote) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(cloudPushNow, 600);   // debounce rapid edits
+}
+function cloudPushNow(){
+  if (!fbUser || !fbRef) return;
+  fbRef.set({ events: state.events, tasks: state.tasks, labels: state.labels, updatedAt: Date.now() }, { merge:true })
+       .catch(e => console.warn('cloud push failed', e));
+}
+
+function updateSyncLabel(){
+  document.getElementById('syncLabel').textContent = fbUser ? 'Synced ✓' : 'Sync';
+}
+function refreshSyncUI(){
+  const signedIn = !!fbUser;
+  document.getElementById('syncSignOut').style.display = signedIn ? 'inline-block' : 'none';
+  document.getElementById('syncSignIn').textContent = signedIn ? 'Re-sync now' : 'Save & Sign in';
+  document.getElementById('syncStatus').textContent = signedIn
+    ? `Synced as ${fbUser.email}. Changes save to the cloud automatically.`
+    : (getFbConfig() ? 'Config saved. Click Sign in to connect this device.'
+                     : 'Paste your Firebase config, then Sign in. Setup steps: DEPLOY.md → Part C.');
+}
+function openSyncModal(){
+  const cfg = getFbConfig();
+  document.getElementById('syncConfig').value = cfg ? JSON.stringify(cfg, null, 2) : '';
+  refreshSyncUI();
+  syncModal.classList.add('open');
+}
+
+document.getElementById('syncBtn').addEventListener('click', openSyncModal);
+syncModal.querySelectorAll('[data-sclose]').forEach(el => el.addEventListener('click', () => syncModal.classList.remove('open')));
+syncModal.addEventListener('click', e => { if (e.target === syncModal) syncModal.classList.remove('open'); });
+
+document.getElementById('syncSignIn').addEventListener('click', () => {
+  const cfg = parseFbConfig(document.getElementById('syncConfig').value);
+  if (!cfg || !cfg.apiKey || !cfg.projectId){
+    alert("That config doesn't look right — paste the whole firebaseConfig snippet from Firebase (it includes apiKey and projectId).");
+    return;
+  }
+  localStorage.setItem('planner.fbConfig', JSON.stringify(cfg));
+  if (!initFirebase()){ alert('Firebase library still loading — try again in a second.'); return; }
+  if (fbUser){ cloudPushNow(); refreshSyncUI(); return; }
+  fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+        .catch(e => alert('Sign-in failed: ' + e.message));
+});
+document.getElementById('syncSignOut').addEventListener('click', () => {
+  if (fbAuth) fbAuth.signOut();
+  fbUser = null; if (fbUnsub){ fbUnsub(); fbUnsub=null; }
+  updateSyncLabel(); refreshSyncUI();
+});
+
+// restore session automatically if already configured
+initFirebase();
+updateSyncLabel();
 
 /* ---------- Seed sample recruiting data on first run ---------- */
 if (!localStorage.getItem('planner.seeded')) {

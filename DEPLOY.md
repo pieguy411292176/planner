@@ -91,3 +91,65 @@ OAuth Client ID (not a secret). ~5–10 minutes, one time.
   match your site origin (scheme + host, no trailing slash, no path).
 - **"access_denied"** → add your Gmail under OAuth consent screen → Test users.
 - **Popup blocked** → allow popups for the site and click Connect again.
+
+---
+
+## Part C — Cross-device sync (Firebase)
+
+This makes your **tasks, events, and labels** sync between your laptop and phone in near
+real-time. You sign in with Google on each device; everything lives in your own private
+Firebase space. Free. ~10 minutes, one time. (Separate from Part B — Calendar sync — though
+both use your Google account.)
+
+### 1. Create a Firebase project
+- Go to **https://console.firebase.google.com/** → **Add project**.
+- Name it `Planner` (you can reuse the existing Google Cloud `Planner` project if it's offered).
+- Google Analytics: not needed — turn it off → **Create project**.
+
+### 2. Create the database
+- Left menu → **Build → Firestore Database** → **Create database**.
+- Start in **Production mode** → pick the closest location → **Enable**.
+
+### 3. Lock the database to each user (security rules)
+- In Firestore → **Rules** tab → replace everything with this, then **Publish**:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /planners/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
+```
+This means only *you*, signed in, can read/write your own data.
+
+### 4. Turn on Google sign-in
+- Left menu → **Build → Authentication** → **Get started**.
+- **Sign-in method** tab → **Google** → enable → set your email as support email → **Save**.
+- **Settings** tab → **Authorized domains** → **Add domain** → `pieguy411292176.github.io`
+  (localhost is already allowed for testing).
+
+### 5. Get your config snippet
+- Click the **gear ⚙ → Project settings** → scroll to **Your apps**.
+- Click the **web icon `</>`** → register app nickname `Planner` (skip Hosting) → **Register app**.
+- Copy the **`firebaseConfig`** object it shows (the block with `apiKey`, `projectId`, etc.).
+
+### 6. Connect in the app
+- Open your site → click **☁ Sync** → paste the whole config into the box → **Save & Sign in**.
+- A Google popup appears → choose your account → **Allow**.
+- The button changes to **Synced ✓**. Do the same on your phone (same Google account) and your
+  data appears on both, updating live.
+
+> Notes
+> - First device to sign in uploads your existing local data; after that all devices share it.
+> - It's "whole-document" sync — if you edit the *same* item on two devices while one is
+>   offline, the last save wins. For normal use (laptop, then phone) this is seamless.
+> - Not signed in → the app still works fully, just locally on that device.
+
+### Troubleshooting
+- **`auth/unauthorized-domain`** → add `pieguy411292176.github.io` under Authentication →
+  Settings → Authorized domains (step 4).
+- **`Missing or insufficient permissions`** → re-check the Firestore Rules in step 3.
+- **Config rejected** → make sure you pasted the full object including `apiKey` and `projectId`.
