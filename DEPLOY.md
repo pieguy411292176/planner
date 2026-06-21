@@ -1,11 +1,15 @@
 # Deploy + Google Calendar setup
 
 Two parts: **(A)** put the site online, **(B)** turn on live Google Calendar sync.
-Do A first — B needs the live URL from A.
+
+> ✅ **Part A is DONE.** The site is live at **https://pieguy411292176.github.io/planner/**
+> (repo: https://github.com/pieguy411292176/planner). To update later, just
+> `git add -A && git commit -m "..." && git push` — Pages redeploys automatically.
+> Part A steps are kept below for reference. **Do Part B next** to turn on Google Calendar.
 
 ---
 
-## Part A — Put it online (GitHub Pages, free)
+## Part A — Put it online (GitHub Pages, free) — ✅ already done
 
 The local repo is already initialized and committed on the `main` branch. You just need a
 GitHub repo to push to.
@@ -69,8 +73,8 @@ OAuth Client ID (not a secret). ~5–10 minutes, one time.
 - Application type: **Web application**
 - Name: `Planner web`
 - **Authorized JavaScript origins → Add URI**, add BOTH:
-  - `https://YOURNAME.github.io`  ← your Pages origin (no path)
-  - `http://localhost:8770`        ← optional, for testing locally
+  - `https://pieguy411292176.github.io`  ← your Pages origin (no path)
+  - `http://localhost:8770`              ← optional, for testing locally
 - Create. Copy the **Client ID** (looks like `1234-abc.apps.googleusercontent.com`).
 
 ### 5. Connect in the app
