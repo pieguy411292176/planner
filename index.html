@@ -164,6 +164,7 @@
   .tdot.weekly { background: var(--weekly); }
   .tdot.monthly { background: var(--monthly); }
   .tdot.recruiting { background: var(--recruiting); }
+  .tdot.events { background: #c084fc; }
 
   .sb-body { flex: 1; overflow: auto; padding: 12px; }
 
@@ -210,10 +211,29 @@
 
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 12px; }
   .sb-group { margin-bottom: 20px; }
-  .group-head { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 7px;
-    margin-bottom: 9px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .group-head { font-size: 13px; font-weight: 700; display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 9px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
+  .group-head .gh-left { display: flex; align-items: center; gap: 7px; }
+  .group-head .gh-count { color: var(--muted); font-weight: 500; font-size: 11px; }
+  .group-head .chev { color: var(--muted); font-size: 10px; transition: transform .15s; }
   .group-head .tdot { width: 9px; height: 9px; border-radius: 50%; }
+  .sb-group.collapsed .chev { transform: rotate(-90deg); }
+  .sb-group.collapsed .group-body { display: none; }
   .sb-group .empty { padding: 10px; }
+
+  /* event rows in the to-do sidebar */
+  .ev-row { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 10px; margin-bottom: 8px; cursor: pointer; display: flex; align-items: center; gap: 9px; }
+  .ev-row:hover { border-color: var(--accent); }
+  .ev-row.gcal { border-left: 3px solid #34d399; }
+  .ev-when { font-size: 11px; color: var(--muted); white-space: nowrap; min-width: 64px; }
+  .ev-title { flex: 1; font-size: 13px; word-break: break-word; }
+  .label-chip { font-size: 10px; padding: 2px 8px; border-radius: 999px; color: #0f1115;
+    font-weight: 600; white-space: nowrap; }
+  .ev-date-head { font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .04em; margin: 12px 0 6px; }
+  .ev-date-head:first-child { margin-top: 0; }
   .section-hint { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.4; }
 
   /* ---------- Modal ---------- */
@@ -302,6 +322,7 @@
         <button class="sb-tab" data-cat="weekly"><span class="tdot weekly"></span>Weekly</button>
         <button class="sb-tab" data-cat="monthly"><span class="tdot monthly"></span>Monthly</button>
         <button class="sb-tab" data-cat="recruiting"><span class="tdot recruiting"></span>Recruiting</button>
+        <button class="sb-tab" data-cat="events"><span class="tdot events"></span>Events</button>
       </div>
       <div class="sb-body" id="sbBody"></div>
     </aside>
@@ -317,6 +338,9 @@
       <div class="field"><label>Title</label><input type="text" id="evTitle" placeholder="e.g. Coffee chat with recruiter" /></div>
       <div class="field"><label>Date</label><input type="date" id="evDate" /></div>
       <div class="field"><label>Time (optional)</label><input type="time" id="evTime" /></div>
+      <div class="field"><label>Label</label>
+        <select id="evLabel"></select>
+      </div>
       <div class="field"><label>Notes</label><textarea id="evNotes" rows="2" placeholder="Location, link, details…"></textarea></div>
       <div id="dayEventList" class="modal-list"></div>
     </div>
@@ -376,8 +400,16 @@ let state = {
   events: load('planner.events', []),
   tasks: load('planner.tasks', []),
   gcalEvents: [],   // pulled live from Google, never persisted
+  labels: load('planner.labels', [
+    { name: 'Friends', color: '#a78bfa' },
+    { name: 'Work',    color: '#60a5fa' },
+  ]),
+  collapsed: load('planner.collapsed', {}),  // which All-view groups are collapsed
 };
 let editingEventId = null;
+
+const LABEL_PALETTE = ['#a78bfa','#60a5fa','#34d399','#fbbf24','#f472b6','#fb923c','#22d3ee','#f87171','#a3e635','#e879f9'];
+function labelColor(name) { const l = state.labels.find(x => x.name === name); return l ? l.color : '#8b92a3'; }
 
 function load(key, fallback) {
   try { const v = JSON.parse(localStorage.getItem(key)); return v ?? fallback; }
@@ -386,6 +418,8 @@ function load(key, fallback) {
 function save() {
   localStorage.setItem('planner.events', JSON.stringify(state.events));
   localStorage.setItem('planner.tasks', JSON.stringify(state.tasks));
+  localStorage.setItem('planner.labels', JSON.stringify(state.labels));
+  localStorage.setItem('planner.collapsed', JSON.stringify(state.collapsed));
 }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
@@ -456,7 +490,7 @@ function renderMonth() {
     const rc = rangeClass(d); if (rc) cls.push(rc);
     if (isToday(d)) cls.push('today');
     let chips = items.slice(0,3).map(it => {
-      if (it.type === 'event') return `<div class="chip event ${it.e.google?'gcal':''}">${it.e.time ? it.e.time+' ' : ''}${esc(it.e.title)}</div>`;
+      if (it.type === 'event') return `<div class="chip event ${it.e.google?'gcal':''}"${lblStyle(it.e)}>${it.e.time ? it.e.time+' ' : ''}${esc(it.e.title)}</div>`;
       return `<div class="chip task ${it.t.cat} ${it.t.done?'done':''}">${esc(it.t.title)}</div>`;
     }).join('');
     if (items.length > 3) chips += `<div class="more-chip">+${items.length-3} more</div>`;
@@ -489,7 +523,7 @@ function renderWeek() {
       const d = addDays(start, i);
       const ds = ymd(d);
       const evs = eventsOn(ds).filter(e => e.time && Number(e.time.split(':')[0]) === h);
-      const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}" data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
+      const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}"${lblStyle(e)} data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
       tl += `<div class="tl-cell ${rangeClass(d)}" data-date="${ds}" data-hour="${h}">${chips}</div>`;
     }
     tl += '</div>';
@@ -509,14 +543,14 @@ function renderDay() {
   let top = '';
   if (tasks.length || allDay.length) {
     top = '<div style="margin-bottom:10px; display:flex; flex-direction:column; gap:5px">';
-    allDay.forEach(e => top += `<div class="chip event ${e.google?'gcal':''}" style="cursor:pointer" data-edit="${e.id}">📌 ${esc(e.title)}</div>`);
+    allDay.forEach(e => top += `<div class="chip event ${e.google?'gcal':''}" style="cursor:pointer${e.label?';border-left:3px solid '+labelColor(e.label):''}" data-edit="${e.id}">📌 ${esc(e.title)}</div>`);
     tasks.forEach(t => top += `<div class="chip task ${t.cat} ${t.done?'done':''}">Due: ${esc(t.title)}</div>`);
     top += '</div>';
   }
   let tl = '<div class="timeline">';
   for (let h = 0; h < 24; h++) {
     const evs = eventsOn(ds).filter(e => e.time && Number(e.time.split(':')[0]) === h);
-    const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}" data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
+    const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}"${lblStyle(e)} data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
     tl += `<div class="tl-row" style="grid-template-columns: 64px 1fr">
       <div class="tl-hour">${fmtHour(h)}</div>
       <div class="tl-cell ${rangeClass(d)}" data-date="${ds}" data-hour="${h}">${chips}</div></div>`;
@@ -580,23 +614,54 @@ const HINTS = {
   recruiting: "One card per company. Track broad next steps for each.",
 };
 
-const CAT_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', recruiting:'Recruiting' };
+const CAT_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', recruiting:'Recruiting', events:'Events' };
 
-function sectionBlock(cat, withHeader) {
+// collapsible group wrapper used in the "All" view
+function groupHtml(key, label, dotClass, bodyHtml, count) {
+  const collapsed = state.collapsed[key] ? 'collapsed' : '';
+  return `<div class="sb-group ${collapsed}" data-group="${key}">
+    <div class="group-head" data-toggle-group="${key}">
+      <span class="gh-left"><span class="tdot ${dotClass}"></span>${label}
+        <span class="gh-count">${count}</span></span>
+      <span class="chev">▼</span>
+    </div>
+    <div class="group-body">${bodyHtml}</div>
+  </div>`;
+}
+
+function taskBody(cat, showHint) {
   const placeholder = cat === 'recruiting' ? 'Add a company…' : 'Add a task…';
   let h = '';
-  if (withHeader) h += `<div class="group-head"><span class="tdot ${cat}"></span>${CAT_LABELS[cat]}</div>`;
-  else h += `<div class="section-hint">${HINTS[cat]}</div>`;
+  if (showHint) h += `<div class="section-hint">${HINTS[cat]}</div>`;
   h += `<div class="add-row">
     <input type="text" class="task-input" data-addcat="${cat}" placeholder="${placeholder}" />
     <button class="btn primary task-add" data-addcat="${cat}">Add</button></div>`;
   const list = state.tasks.filter(t => t.cat === cat);
   list.sort((a,b) => (a.done?1:0) - (b.done?1:0));   // incomplete first
-  if (!list.length) {
-    h += `<div class="empty">No ${cat==='recruiting'?'companies':'tasks'} yet.</div>`;
-  } else {
-    h += list.map(t => taskCard(t, cat)).join('');
-  }
+  if (!list.length) h += `<div class="empty">No ${cat==='recruiting'?'companies':'tasks'} yet.</div>`;
+  else h += list.map(t => taskCard(t, cat)).join('');
+  return h;
+}
+
+function eventsBody(showHint) {
+  let h = '';
+  if (showHint) h += `<div class="section-hint">All your events, soonest first. Click one to edit it or set a label.</div>`;
+  h += `<div class="add-row"><button class="btn primary" id="evAddInline" style="width:100%">+ New event</button></div>`;
+  const evs = [...state.events, ...state.gcalEvents]
+    .sort((a,b) => (a.date + (a.time||'')).localeCompare(b.date + (b.time||'')));
+  if (!evs.length) { h += `<div class="empty">No events yet.</div>`; return h; }
+  let lastDate = '';
+  evs.forEach(e => {
+    if (e.date !== lastDate) { h += `<div class="ev-date-head">${fmtDateHead(e.date)}</div>`; lastDate = e.date; }
+    const when = e.time ? to12(e.time) : 'all day';
+    const labelChip = e.label ? `<span class="label-chip" style="background:${labelColor(e.label)}">${esc(e.label)}</span>` : '';
+    const gtag = e.google ? `<span class="ev-when" style="color:#34d399;min-width:0">Google</span>` : '';
+    h += `<div class="ev-row ${e.google?'gcal':''}" data-evrow="${e.id}">
+      <span class="ev-when">${when}</span>
+      <span class="ev-title">${esc(e.title)}</span>
+      ${labelChip}${gtag}
+    </div>`;
+  });
   return h;
 }
 
@@ -605,10 +670,29 @@ function renderSidebar() {
     b.classList.toggle('active', b.dataset.cat === state.activeCat));
   const cat = state.activeCat;
   if (cat === 'all') {
-    sbBody.innerHTML = CATS.map(c => `<div class="sb-group">${sectionBlock(c, true)}</div>`).join('');
+    let html = '';
+    CATS.forEach(c => html += groupHtml(c, CAT_LABELS[c], c, taskBody(c, false), state.tasks.filter(t=>t.cat===c).length));
+    html += groupHtml('events', 'Events', 'events', eventsBody(false), state.events.length + state.gcalEvents.length);
+    sbBody.innerHTML = html;
+  } else if (cat === 'events') {
+    sbBody.innerHTML = eventsBody(true);
   } else {
-    sbBody.innerHTML = sectionBlock(cat, false);
+    sbBody.innerHTML = taskBody(cat, true);
   }
+
+  // collapse / expand groups (All view)
+  sbBody.querySelectorAll('[data-toggle-group]').forEach(el =>
+    el.addEventListener('click', () => {
+      const g = el.dataset.toggleGroup;
+      state.collapsed[g] = !state.collapsed[g];
+      save(); renderSidebar();
+    }));
+
+  // event rows → open the event (editEvent handles Google as read-only)
+  sbBody.querySelectorAll('[data-evrow]').forEach(el =>
+    el.addEventListener('click', () => editEvent(el.dataset.evrow)));
+  const inlineAdd = document.getElementById('evAddInline');
+  if (inlineAdd) inlineAdd.addEventListener('click', () => openEventModal(ymd(state.cursor)));
 
   const doAdd = (c, inputEl) => {
     const v = inputEl.value.trim();
@@ -669,8 +753,30 @@ const evTitle = document.getElementById('evTitle');
 const evDate = document.getElementById('evDate');
 const evTime = document.getElementById('evTime');
 const evNotes = document.getElementById('evNotes');
+const evLabel = document.getElementById('evLabel');
 const evDelete = document.getElementById('evDelete');
 const dayEventList = document.getElementById('dayEventList');
+
+function populateLabelSelect(selected) {
+  let opts = `<option value="">(no label)</option>`;
+  state.labels.forEach(l =>
+    opts += `<option value="${esc(l.name)}" ${l.name===selected?'selected':''}>${esc(l.name)}</option>`);
+  opts += `<option value="__new__">+ New label…</option>`;
+  evLabel.innerHTML = opts;
+}
+evLabel.addEventListener('change', function() {
+  if (this.value !== '__new__') return;
+  const name = (prompt('New label name (e.g. Friends, Work, Gym):') || '').trim();
+  if (name) {
+    if (!state.labels.find(l => l.name.toLowerCase() === name.toLowerCase())) {
+      state.labels.push({ name, color: LABEL_PALETTE[state.labels.length % LABEL_PALETTE.length] });
+      save();
+    }
+    populateLabelSelect(name);
+  } else {
+    populateLabelSelect('');
+  }
+});
 
 function openEventModal(dateStr, time) {
   editingEventId = null;
@@ -678,6 +784,7 @@ function openEventModal(dateStr, time) {
   evTitle.value = ''; evNotes.value = '';
   evDate.value = dateStr || ymd(state.cursor);
   evTime.value = time || '';
+  populateLabelSelect('');
   evDelete.style.display = 'none';
   // show existing events for that day
   const evs = dateStr ? eventsOn(dateStr) : [];
@@ -704,6 +811,7 @@ function editEvent(id) {
   editingEventId = id;
   document.getElementById('eventModalTitle').textContent = 'Edit Event';
   evTitle.value = e.title; evDate.value = e.date; evTime.value = e.time||''; evNotes.value = e.notes||'';
+  populateLabelSelect(e.label || '');
   evDelete.style.display = 'inline-block';
   dayEventList.innerHTML = '';
   eventModal.classList.add('open');
@@ -713,11 +821,12 @@ function editEvent(id) {
 function saveEvent() {
   const title = evTitle.value.trim();
   if (!title) { evTitle.focus(); return; }
+  const label = evLabel.value === '__new__' ? '' : evLabel.value;
   if (editingEventId) {
     const e = state.events.find(x=>x.id===editingEventId);
-    Object.assign(e, { title, date: evDate.value, time: evTime.value, notes: evNotes.value });
+    Object.assign(e, { title, date: evDate.value, time: evTime.value, notes: evNotes.value, label });
   } else {
-    state.events.push({ id: uid(), title, date: evDate.value, time: evTime.value, notes: evNotes.value });
+    state.events.push({ id: uid(), title, date: evDate.value, time: evTime.value, notes: evNotes.value, label });
   }
   save(); closeModal(); render();
 }
@@ -787,6 +896,9 @@ document.addEventListener('keydown', e => {
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function fmtHour(h){ const ap = h<12?'AM':'PM'; const hr = h%12===0?12:h%12; return `${hr} ${ap}`; }
 function fmtHourInput(h){ return String(h).padStart(2,'0') + ':00'; }
+function to12(t){ const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; const hr=h%12===0?12:h%12; return `${hr}:${String(m).padStart(2,'0')} ${ap}`; }
+function fmtDateHead(ds){ const d=parseYmd(ds); return `${WD_SHORT[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`; }
+function lblStyle(e){ return e.label ? ` style="border-left:3px solid ${labelColor(e.label)}"` : ''; }
 function fmtRange(a, b){
   if (a.getMonth() === b.getMonth())
     return `${MONTHS_SHORT[a.getMonth()]} ${a.getDate()}–${b.getDate()}, ${a.getFullYear()}`;
