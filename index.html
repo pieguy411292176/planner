@@ -4,6 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0f1115" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>Planner</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗓️</text></svg>" />
 <style>
@@ -93,6 +96,10 @@
   .day-cell:hover { border-color: var(--accent); }
   .day-cell.other-month { opacity: .4; }
   .day-cell.today { border-color: var(--today); box-shadow: inset 0 0 0 1px var(--today); }
+  /* light tinge over the active to-do range */
+  .range-daily { background: rgba(74,222,128,.13) !important; }
+  .range-weekly { background: rgba(251,191,36,.16) !important; }
+  .range-monthly { background: rgba(244,114,182,.10) !important; }
   .day-num { font-size: 12px; font-weight: 600; color: var(--muted); }
   .day-cell.today .day-num { color: var(--today); }
   .chip {
@@ -202,6 +209,11 @@
   .ns-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-top: 8px; }
 
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 12px; }
+  .sb-group { margin-bottom: 20px; }
+  .group-head { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 7px;
+    margin-bottom: 9px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .group-head .tdot { width: 9px; height: 9px; border-radius: 50%; }
+  .sb-group .empty { padding: 10px; }
   .section-hint { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.4; }
 
   /* ---------- Modal ---------- */
@@ -285,7 +297,8 @@
         <button class="icon-btn" id="clearDoneBtn" title="Clear completed">🧹</button>
       </div>
       <div class="sb-tabs" id="sbTabs">
-        <button class="sb-tab active" data-cat="daily"><span class="tdot daily"></span>Daily</button>
+        <button class="sb-tab active" data-cat="all">All</button>
+        <button class="sb-tab" data-cat="daily"><span class="tdot daily"></span>Daily</button>
         <button class="sb-tab" data-cat="weekly"><span class="tdot weekly"></span>Weekly</button>
         <button class="sb-tab" data-cat="monthly"><span class="tdot monthly"></span>Monthly</button>
         <button class="sb-tab" data-cat="recruiting"><span class="tdot recruiting"></span>Recruiting</button>
@@ -359,7 +372,7 @@ const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct
 let state = {
   view: 'month',
   cursor: new Date(),     // reference date for the current view
-  activeCat: 'daily',
+  activeCat: 'all',
   events: load('planner.events', []),
   tasks: load('planner.tasks', []),
   gcalEvents: [],   // pulled live from Google, never persisted
@@ -385,6 +398,19 @@ function isToday(d) { return ymd(d) === ymd(new Date()); }
 function startOfWeek(d) { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); x.setHours(0,0,0,0); return x; }
 function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate()+n); return x; }
 function sameMonth(a, b) { return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth(); }
+
+/* tinge class for a date based on the active to-do section (anchored to TODAY) */
+function rangeClass(d) {
+  const cat = state.activeCat;
+  const today = new Date();
+  if (cat === 'daily')   return ymd(d) === ymd(today) ? 'range-daily' : '';
+  if (cat === 'weekly') {
+    const s = startOfWeek(today), e = addDays(s, 7);   // [s, e)
+    return (d >= s && d < e) ? 'range-weekly' : '';
+  }
+  if (cat === 'monthly') return sameMonth(d, today) ? 'range-monthly' : '';
+  return '';   // 'all' and 'recruiting' → no tinge
+}
 
 /* ---------- Data lookups ---------- */
 function eventsOn(dateStr) {
@@ -427,6 +453,7 @@ function renderMonth() {
     const items = [...events.map(e => ({type:'event', e})), ...tasks.map(t => ({type:'task', t}))];
     const cls = ['day-cell'];
     if (!sameMonth(d, c)) cls.push('other-month');
+    const rc = rangeClass(d); if (rc) cls.push(rc);
     if (isToday(d)) cls.push('today');
     let chips = items.slice(0,3).map(it => {
       if (it.type === 'event') return `<div class="chip event ${it.e.google?'gcal':''}">${it.e.time ? it.e.time+' ' : ''}${esc(it.e.title)}</div>`;
@@ -450,7 +477,7 @@ function renderWeek() {
   let head = `<div class="week-head" style="grid-template-columns: 56px repeat(7,1fr)"><div></div>`;
   for (let i = 0; i < 7; i++) {
     const d = addDays(start, i);
-    head += `<div class="week-day-head ${isToday(d)?'today':''}" data-date="${ymd(d)}">
+    head += `<div class="week-day-head ${isToday(d)?'today':''} ${rangeClass(d)}" data-date="${ymd(d)}">
       <div class="wd-name">${WD_SHORT[i]}</div><div class="wd-num">${d.getDate()}</div></div>`;
   }
   head += '</div>';
@@ -463,7 +490,7 @@ function renderWeek() {
       const ds = ymd(d);
       const evs = eventsOn(ds).filter(e => e.time && Number(e.time.split(':')[0]) === h);
       const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}" data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
-      tl += `<div class="tl-cell" data-date="${ds}" data-hour="${h}">${chips}</div>`;
+      tl += `<div class="tl-cell ${rangeClass(d)}" data-date="${ds}" data-hour="${h}">${chips}</div>`;
     }
     tl += '</div>';
   }
@@ -492,7 +519,7 @@ function renderDay() {
     const chips = evs.map(e => `<div class="chip event ${e.google?'gcal':''}" data-edit="${e.id}">${e.time} ${esc(e.title)}</div>`).join('');
     tl += `<div class="tl-row" style="grid-template-columns: 64px 1fr">
       <div class="tl-hour">${fmtHour(h)}</div>
-      <div class="tl-cell" data-date="${ds}" data-hour="${h}">${chips}</div></div>`;
+      <div class="tl-cell ${rangeClass(d)}" data-date="${ds}" data-hour="${h}">${chips}</div></div>`;
   }
   tl += '</div>';
   main.innerHTML = top + tl;
@@ -553,36 +580,48 @@ const HINTS = {
   recruiting: "One card per company. Track broad next steps for each.",
 };
 
+const CAT_LABELS = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', recruiting:'Recruiting' };
+
+function sectionBlock(cat, withHeader) {
+  const placeholder = cat === 'recruiting' ? 'Add a company…' : 'Add a task…';
+  let h = '';
+  if (withHeader) h += `<div class="group-head"><span class="tdot ${cat}"></span>${CAT_LABELS[cat]}</div>`;
+  else h += `<div class="section-hint">${HINTS[cat]}</div>`;
+  h += `<div class="add-row">
+    <input type="text" class="task-input" data-addcat="${cat}" placeholder="${placeholder}" />
+    <button class="btn primary task-add" data-addcat="${cat}">Add</button></div>`;
+  const list = state.tasks.filter(t => t.cat === cat);
+  list.sort((a,b) => (a.done?1:0) - (b.done?1:0));   // incomplete first
+  if (!list.length) {
+    h += `<div class="empty">No ${cat==='recruiting'?'companies':'tasks'} yet.</div>`;
+  } else {
+    h += list.map(t => taskCard(t, cat)).join('');
+  }
+  return h;
+}
+
 function renderSidebar() {
   document.querySelectorAll('.sb-tab').forEach(b =>
     b.classList.toggle('active', b.dataset.cat === state.activeCat));
   const cat = state.activeCat;
-  const placeholder = cat === 'recruiting' ? 'Add a company…' : 'Add a task…';
-  let html = `<div class="section-hint">${HINTS[cat]}</div>`;
-  html += `<div class="add-row">
-    <input type="text" id="taskInput" placeholder="${placeholder}" />
-    <button class="btn primary" id="taskAdd">Add</button></div>`;
-  const list = state.tasks.filter(t => t.cat === cat);
-  // incomplete first, then done
-  list.sort((a,b) => (a.done?1:0) - (b.done?1:0));
-  if (!list.length) {
-    html += `<div class="empty">Nothing here yet.<br>Add your first ${cat==='recruiting'?'company':'task'} above.</div>`;
+  if (cat === 'all') {
+    sbBody.innerHTML = CATS.map(c => `<div class="sb-group">${sectionBlock(c, true)}</div>`).join('');
   } else {
-    html += list.map(t => taskCard(t, cat)).join('');
+    sbBody.innerHTML = sectionBlock(cat, false);
   }
-  sbBody.innerHTML = html;
 
-  const input = document.getElementById('taskInput');
-  const addBtn = document.getElementById('taskAdd');
-  const doAdd = () => {
-    const v = input.value.trim();
+  const doAdd = (c, inputEl) => {
+    const v = inputEl.value.trim();
     if (!v) return;
-    state.tasks.push({ id: uid(), cat, title: v, done: false, due: '', notes: '' });
+    state.tasks.push({ id: uid(), cat: c, title: v, done: false, due: '', notes: '' });
     save(); renderSidebar(); render();
-    setTimeout(() => document.getElementById('taskInput').focus(), 0);
+    const again = sbBody.querySelector(`.task-input[data-addcat="${c}"]`);
+    if (again) again.focus();
   };
-  addBtn.addEventListener('click', doAdd);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+  sbBody.querySelectorAll('.task-add').forEach(btn =>
+    btn.addEventListener('click', () => doAdd(btn.dataset.addcat, sbBody.querySelector(`.task-input[data-addcat="${btn.dataset.addcat}"]`))));
+  sbBody.querySelectorAll('.task-input').forEach(inp =>
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(inp.dataset.addcat, inp); }));
 
   sbBody.querySelectorAll('[data-toggle]').forEach(el =>
     el.addEventListener('click', () => toggleTask(el.dataset.toggle)));
@@ -711,13 +750,15 @@ document.getElementById('addEventBtn').addEventListener('click', () => openEvent
 document.querySelectorAll('#viewSwitch button').forEach(b =>
   b.addEventListener('click', () => { state.view = b.dataset.view; render(); }));
 document.querySelectorAll('.sb-tab').forEach(b =>
-  b.addEventListener('click', () => { state.activeCat = b.dataset.cat; renderSidebar(); }));
+  b.addEventListener('click', () => { state.activeCat = b.dataset.cat; render(); }));
 
 document.getElementById('clearDoneBtn').addEventListener('click', () => {
-  const n = state.tasks.filter(t => t.cat === state.activeCat && t.done).length;
+  const all = state.activeCat === 'all';
+  const match = t => t.done && (all || t.cat === state.activeCat);
+  const n = state.tasks.filter(match).length;
   if (!n) return;
-  if (confirm(`Clear ${n} completed ${state.activeCat} task(s)?`)) {
-    state.tasks = state.tasks.filter(t => !(t.cat === state.activeCat && t.done));
+  if (confirm(`Clear ${n} completed ${all ? '' : state.activeCat + ' '}task(s)?`)) {
+    state.tasks = state.tasks.filter(t => !match(t));
     save(); renderSidebar(); render();
   }
 });
